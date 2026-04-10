@@ -2,6 +2,43 @@ const chatContainer = document.getElementById("chat-container");
 const channelName = "quazy";
 const MAX_MESSAGES = 25;
 
+const badgeUrls = {
+  broadcaster: "https://assets.kickbotcdn.com/kick_badges/broadcaster.svg",
+  founder: "https://assets.kickbotcdn.com/kick_badges/founder.svg",
+  moderator: "https://assets.kickbotcdn.com/kick_badges/moderator.svg",
+  og: "https://assets.kickbotcdn.com/kick_badges/og.svg",
+  staff: "https://assets.kickbotcdn.com/kick_badges/staff.svg",
+  subscriber: "https://assets.kickbotcdn.com/kick_badges/subscriber.svg",
+  verified: "https://assets.kickbotcdn.com/kick_badges/verified.svg",
+  vip: "https://assets.kickbotcdn.com/kick_badges/vip.svg",
+  sub_gifter: "https://assets.kickbotcdn.com/kick_badges/subgifter.svg"
+};
+
+const bots = [
+  "kickbot",
+  "botrix",
+  "aerokick",
+  "kicklet",
+  "notibot",
+  "casterlabs",
+  "logibot",
+  "babzbot",
+  "squadbot",
+  "intrx",
+  "mrbeefbot",
+  "babblechat"
+];
+
+let socket = null;
+let subBadges = [];
+let sevenTvEmotes = [];
+const streamerInfo = {
+  kick: {
+    slug: channelName,
+    user_id: null
+  }
+};
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -11,95 +48,11 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function getEmoteUrl(emote) {
-  const direct =
-    emote?.image_url ||
-    emote?.imageUrl ||
-    emote?.url ||
-    emote?.src ||
-    emote?.fullsize ||
-    emote?.fullsize_url ||
-    emote?.full_size_url;
-
-  if (direct) return direct;
-
-  const nested =
-    emote?.emote?.image_url ||
-    emote?.emote?.imageUrl ||
-    emote?.emote?.url ||
-    emote?.emote?.src;
-
-  if (nested) return nested;
-
-  const id =
-    emote?.id ||
-    emote?.emote_id ||
-    emote?.emoteId ||
-    emote?.emote?.id;
-
-  if (id) {
-    return `https://files.kick.com/emotes/${id}/fullsize`;
-  }
-
-  return null;
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function getEmoteName(emote) {
-  return (
-    emote?.name ||
-    emote?.slug ||
-    emote?.code ||
-    emote?.shortcut ||
-    emote?.text ||
-    emote?.emote?.name ||
-    emote?.emote?.slug ||
-    null
-  );
-}
-
-function renderMessageHtml(content, emotes = []) {
-  const emoteMap = new Map();
-
-  if (Array.isArray(emotes)) {
-    for (const emote of emotes) {
-      const name = getEmoteName(emote);
-      const url = getEmoteUrl(emote);
-      if (name && url) emoteMap.set(name, url);
-    }
-  }
-
-  const tokens = String(content || "").split(/(\s+)/);
-
-  return tokens
-    .map((token) => {
-      if (emoteMap.has(token)) {
-        const src = emoteMap.get(token);
-        const alt = escapeHtml(token);
-        return `<img class="chat-emote" src="${src}" alt="${alt}" title="${alt}">`;
-      }
-
-      return `<span class="message-fragment">${escapeHtml(token)}</span>`;
-    })
-    .join("");
-}
-
-function addMessage(username, messageHtml, color = "#00ff99") {
-  const div = document.createElement("div");
-  div.className = "chat-message";
-
-  div.innerHTML = `
-    <span class="username" style="color:${escapeHtml(color)}">${escapeHtml(username)}:</span>
-    <span class="message">${messageHtml}</span>
-  `;
-
-  chatContainer.prepend(div);
-
-  while (chatContainer.children.length > MAX_MESSAGES) {
-    chatContainer.removeChild(chatContainer.lastChild);
-  }
-}
-
-async function getChatroomId() {
+async function getChannelData() {
   const res = await fetch(`https://kick.com/api/v2/channels/${channelName}`, {
     headers: { Accept: "application/json" }
   });
@@ -109,16 +62,177 @@ async function getChatroomId() {
   }
 
   const data = await res.json();
-  return data?.chatroom?.id;
+  return data;
 }
 
-function normalizePayload(raw) {
-  if (raw?.event === "App\\Events\\ChatMessageEvent") {
-    return typeof raw.data === "string" ? JSON.parse(raw.data) : raw.data;
+async function fetchSevenTvEmotes() {
+  if (!streamerInfo.kick.user_id) return;
+
+  try {
+    const userResponse = fetch(
+      `https://7tv.io/v3/users/kick/${streamerInfo.kick.user_id}`
+    );
+    const globalResponse = fetch(`https://7tv.io/v3/emote-sets/global`);
+
+    const [userResponseResult, globalResponseResult] = await Promise.all([
+      userResponse,
+      globalResponse
+    ]);
+
+    let userEmotes = [];
+    if (userResponseResult.ok) {
+      const userData = await userResponseResult.json();
+      userEmotes = userData.emote_set?.emotes || [];
+    }
+
+    let globalEmotes = [];
+    if (globalResponseResult.ok) {
+      const globalData = await globalResponseResult.json();
+      globalEmotes = globalData.emotes || [];
+    }
+
+    const emotes = [...userEmotes, ...globalEmotes];
+    sevenTvEmotes = [];
+
+    emotes.forEach((emote) => {
+      const file = emote?.data?.host?.files?.find((f) => f.name === "4x.webp");
+      const hostUrl = emote?.data?.host?.url;
+      if (file && hostUrl) {
+        sevenTvEmotes.push({
+          name: emote.name,
+          url: `https:${hostUrl}/${file.name}`
+        });
+      }
+    });
+  } catch (error) {
+    console.error("Error fetching 7TV emotes:", error);
+  }
+}
+
+function renderKickAnd7TvEmotes(content) {
+  let messageWithEmotes = String(content || "");
+
+  messageWithEmotes = messageWithEmotes.replace(
+    /\[(emote|emoji):(\w+):?[^\]]*\]/g,
+    (match, type, id) => {
+      const imageSrc = `https://files.kick.com/emotes/${id}/fullsize`;
+      return `<img class="chat-emote" src="${imageSrc}" alt="${escapeHtml(id)}">`;
+    }
+  );
+
+  if (sevenTvEmotes.length > 0) {
+    sevenTvEmotes.forEach((emote) => {
+      const escapedName = escapeRegExp(emote.name);
+      const emoteRegex = new RegExp(`(^|\\s)${escapedName}(?=\\s|$)`, "g");
+      messageWithEmotes = messageWithEmotes.replace(
+        emoteRegex,
+        `$1<img class="chat-emote" src="${emote.url}" alt="${escapeHtml(emote.name)}">`
+      );
+    });
   }
 
-  if (raw?.event === "ChatMessageSentEvent") {
-    return typeof raw.data === "string" ? JSON.parse(raw.data) : raw.data;
+  return messageWithEmotes;
+}
+
+function buildBadgesHtml(sender) {
+  const badges = sender?.identity?.badges || [];
+  if (!badges.length) return "";
+
+  const parts = [];
+
+  badges.forEach((badge) => {
+    let src = "";
+
+    if (badge.type === "subscriber") {
+      let subBadge = null;
+      for (const badgeData of subBadges) {
+        if (badgeData.months <= (badge.count || 0)) {
+          subBadge = badgeData;
+        } else {
+          break;
+        }
+      }
+
+      if (subBadge?.badge_image?.src) {
+        src = subBadge.badge_image.src;
+      } else if (subBadges.length === 0 && badgeUrls[badge.type]) {
+        src = badgeUrls[badge.type];
+      }
+    } else if (badgeUrls[badge.type]) {
+      src = badgeUrls[badge.type];
+    }
+
+    if (src) {
+      parts.push(
+        `<img class="chat-badge" src="${src}" alt="${escapeHtml(badge.type)}">`
+      );
+    }
+  });
+
+  return parts.join("");
+}
+
+function addMessage(eventData) {
+  const username = eventData?.sender?.username || "unknown";
+  const color = eventData?.sender?.identity?.color || "#00ff99";
+
+  if (bots.includes(username.toLowerCase())) {
+    return;
+  }
+
+  const renderedContent = renderKickAnd7TvEmotes(eventData?.content || "");
+  if (!renderedContent.length) return;
+
+  const badgesHtml = buildBadgesHtml(eventData.sender);
+
+  const div = document.createElement("div");
+  div.className = "chat-message";
+  div.id = eventData.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  const isTagged = renderedContent
+    .toLowerCase()
+    .includes(`@${streamerInfo.kick.slug.toLowerCase()}`);
+
+  if (isTagged) {
+    div.classList.add("highlighted-message");
+  }
+
+  div.innerHTML = `
+    <span class="chat-badges">${badgesHtml}</span>
+    <span class="username" style="color:${escapeHtml(color)}">${escapeHtml(username)}:</span>
+    <span class="message">${renderedContent}</span>
+  `;
+
+  chatContainer.prepend(div);
+
+  while (chatContainer.children.length > MAX_MESSAGES) {
+    chatContainer.removeChild(chatContainer.lastChild);
+  }
+
+  setTimeout(() => {
+    div.classList.add("fade-out");
+    setTimeout(() => div.remove(), 750);
+  }, 60000);
+}
+
+function removeMessageById(messageId) {
+  const el = document.getElementById(messageId);
+  if (el) el.remove();
+}
+
+function normalizeIncoming(raw) {
+  if (raw?.event === "App\\Events\\ChatMessageEvent") {
+    return {
+      type: "chatMessageEvent",
+      data: typeof raw.data === "string" ? JSON.parse(raw.data) : raw.data
+    };
+  }
+
+  if (raw?.event === "App\\Events\\ChatMessageDeletedEvent") {
+    return {
+      type: "chatMessageDeletedEvent",
+      data: typeof raw.data === "string" ? JSON.parse(raw.data) : raw.data
+    };
   }
 
   return null;
@@ -126,24 +240,33 @@ function normalizePayload(raw) {
 
 async function connectToChat() {
   try {
-    const chatroomId = await getChatroomId();
-    if (!chatroomId) throw new Error("No chatroom id found");
+    const channelData = await getChannelData();
+    const chatroomId = channelData?.chatroom?.id;
+    subBadges = channelData?.subscriber_badges || [];
+    streamerInfo.kick.user_id = channelData?.user_id || channelData?.user?.id || null;
 
-    const socket = new WebSocket(
+    await fetchSevenTvEmotes();
+
+    if (!chatroomId) {
+      throw new Error("No chatroom id found");
+    }
+
+    socket = new WebSocket(
       "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=7.6.0&flash=false"
     );
 
-    socket.onopen = () => {
-      socket.send(JSON.stringify({
-        event: "pusher:subscribe",
-        data: {
-          auth: "",
-          channel: `chatrooms.${chatroomId}.v2`
-        }
-      }));
-    };
+    socket.addEventListener("open", () => {
+      socket.send(
+        JSON.stringify({
+          event: "pusher:subscribe",
+          data: {
+            channel: `chatrooms.${chatroomId}.v2`
+          }
+        })
+      );
+    });
 
-    socket.onmessage = (event) => {
+    socket.addEventListener("message", (event) => {
       const raw = JSON.parse(event.data);
 
       if (raw?.event === "pusher:ping") {
@@ -151,47 +274,29 @@ async function connectToChat() {
         return;
       }
 
-      const payload = normalizePayload(raw);
-      if (!payload) return;
+      const normalized = normalizeIncoming(raw);
+      if (!normalized) return;
 
-      console.log("KICK PAYLOAD:", payload);
+      if (normalized.type === "chatMessageEvent") {
+        addMessage(normalized.data);
+      }
 
-      const username =
-        payload?.sender?.username ||
-        payload?.user?.username ||
-        payload?.data?.user?.username ||
-        "unknown";
+      if (normalized.type === "chatMessageDeletedEvent") {
+        const messageId =
+          normalized.data?.message?.id ||
+          normalized.data?.id;
+        if (messageId) removeMessageById(messageId);
+      }
+    });
 
-      const color =
-        payload?.sender?.identity?.color ||
-        payload?.user?.identity?.color ||
-        "#00ff99";
+    socket.addEventListener("close", () => {
+      setTimeout(connectToChat, 5000);
+    });
 
-      const content =
-        payload?.content ||
-        payload?.message ||
-        payload?.data?.message?.message ||
-        "";
-
-      const emotes =
-        payload?.emotes ||
-        payload?.message_emotes ||
-        payload?.data?.message?.emotes ||
-        [];
-
-      const messageHtml = renderMessageHtml(content, emotes);
-
-      addMessage(username, messageHtml, color);
-    };
-
-    socket.onerror = (e) => {
-      console.error("WebSocket error", e);
-    };
-
-    socket.onclose = () => {
-      console.log("Socket closed, retrying in 3s");
-      setTimeout(connectToChat, 3000);
-    };
+    socket.addEventListener("error", (err) => {
+      console.error("WebSocket error:", err);
+      socket.close();
+    });
   } catch (err) {
     console.error("Kick chat connection failed:", err);
     setTimeout(connectToChat, 5000);
