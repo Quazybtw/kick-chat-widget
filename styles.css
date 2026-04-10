@@ -34,7 +34,37 @@ body {
   max-width: 100%;
   word-wrap: break-word;
 }
+.chat-badges {
+  display: inline-block;
+  margin-right: 4px;
+}
 
+.chat-badge {
+  display: inline-block;
+  margin-right: 3px;
+  margin-bottom: 2px;
+  min-height: 1em;
+  max-height: 1em;
+  max-width: 1em;
+  vertical-align: middle;
+}
+
+.chat-emote {
+  display: inline-block;
+  max-height: 1.2em;
+  min-width: 1em;
+  margin: 0 0.1em 0 0.15em;
+  vertical-align: middle;
+}
+
+.fade-out {
+  opacity: 0;
+  transition: opacity 0.75s ease;
+}
+
+.highlighted-message {
+  background-color: rgba(0, 0, 0, 0.4);
+}
 .username {
   font-weight: bold;
   margin-right: 6px;
