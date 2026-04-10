@@ -269,19 +269,21 @@ async function connectToKickChat() {
       );
     };
 
-    ws.onmessage = (event) => {
-      const raw = JSON.parse(event.data);
+ws.onmessage = (event) => {
+  const raw = JSON.parse(event.data);
 
-      if (raw?.event === "pusher:ping") {
-        ws.send(JSON.stringify({ event: "pusher:pong", data: {} }));
-        return;
-      }
+  if (raw?.event === "pusher:ping") {
+    ws.send(JSON.stringify({ event: "pusher:pong", data: {} }));
+    return;
+  }
 
-      const payload = normalizeIncomingEvent(raw);
-      if (!payload) return;
+  const payload = normalizeIncomingEvent(raw);
+  if (!payload) return;
 
-      addMessage(payload);
-    };
+  console.log("MY CHAT PAYLOAD:", payload);
+
+  addMessage(payload);
+};
 
     ws.onerror = (err) => {
       console.error("Kick WebSocket error:", err);
